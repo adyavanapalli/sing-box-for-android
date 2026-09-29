@@ -46,12 +46,14 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 class BoxService(private val service: Service, private val platformInterface: PlatformInterface) : CommandServerHandler {
     companion object {
         private const val PROFILE_UPDATE_INTERVAL = 15L * 60 * 1000 // 15 minutes in milliseconds
         private const val TAG = "BoxService"
+        private const val LIBBOX_READY_TIMEOUT_MS = 8_000L
 
         @OptIn(DelicateCoroutinesApi::class)
         fun start() = GlobalScope.launch(Dispatchers.Main.immediate) {
@@ -388,6 +390,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         GlobalScope.launch(Dispatchers.IO) {
             Settings.startedByUser = true
+            // detour: wait until Application has set up libbox. If the wait times out, the start fails
+            // with an alert, as before. Show the notification first: Android requires startForeground()
+            // soon after startForegroundService().
+            withContext(Dispatchers.Main) {
+                notification.show(lastProfileName, R.string.status_starting)
+            }
+            if (withTimeoutOrNull(LIBBOX_READY_TIMEOUT_MS) { Application.libboxReady.await() } == null) {
+                Log.w(TAG, "libbox is not set up after $LIBBOX_READY_TIMEOUT_MS ms")
+            }
             try {
                 startCommandServer()
             } catch (e: Exception) {

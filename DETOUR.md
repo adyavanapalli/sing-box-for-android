@@ -29,8 +29,12 @@ All changes carry a `detour:` comment.
     starts the VPN service.
   - After 3 restarts in 10 minutes, or when a restart fails, the guard stops and posts an alert.
 - `bg/BoxService.kt`: starts the guard when the VPN has started, and stops it before each stop.
-  `onStartCommand` returns `START_STICKY`.
+  `onStartCommand` returns `START_STICKY`. When a start fails, SFA logs the reason and posts the
+  notification "SFA stopped". Before, only the open screen of SFA showed the reason.
 - `Application.kt`: the `:guard` process skips the setup of the app. It does not load libbox.
+  `libboxReady` completes when the main process has set up libbox, and `BoxService` waits for it.
+  Before, a service start in a new process could come first, and the start failed with
+  `listen unix command.sock: bind: read-only file system` (upstream issue #3327).
 - `vendor/GitHubUpdateChecker.kt`: updates come from the releases of this fork.
 - `app/build.gradle.kts`: `-PdetourDebuggable=true` makes a debuggable test build.
 - `.github/workflows/detour.yml`: the build.

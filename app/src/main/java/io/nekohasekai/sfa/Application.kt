@@ -26,6 +26,7 @@ import io.nekohasekai.sfa.utils.HookModuleUpdateNotifier
 import io.nekohasekai.sfa.utils.HookStatusClient
 import io.nekohasekai.sfa.utils.PrivilegeSettingsClient
 import io.nekohasekai.sfa.vendor.Vendor
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -70,10 +71,15 @@ class Application : Application() {
 
         @Suppress("OPT_IN_USAGE")
         GlobalScope.launch(Dispatchers.IO) {
-            Settings.dataStore.initialize()
-            HookStatusClient.register(this@Application)
-            PrivilegeSettingsClient.register(this@Application)
-            initialize(baseDir, workingDir, tempDir)
+            try {
+                Settings.dataStore.initialize()
+                HookStatusClient.register(this@Application)
+                PrivilegeSettingsClient.register(this@Application)
+                initialize(baseDir, workingDir, tempDir)
+            } finally {
+                // detour: the service waits for this before it starts the core. See libboxReady.
+                libboxReady.complete(Unit)
+            }
             UpdateProfileWork.reconfigureUpdater()
             HookModuleUpdateNotifier.sync(this@Application)
             TaildropFiles.cleanCache()
@@ -125,6 +131,11 @@ class Application : Application() {
 
     companion object {
         lateinit var application: BoxApplication
+
+        // detour: completes when onCreate has set up libbox, also after an error. When Android starts
+        // the process for the service, the service can start before the setup. The core then has no
+        // working directory and cannot create command.sock ("bind: read-only file system").
+        val libboxReady = CompletableDeferred<Unit>()
         val notification by lazy { application.getSystemService<NotificationManager>()!! }
         val connectivity by lazy { application.getSystemService<ConnectivityManager>()!! }
         val packageManager by lazy { application.packageManager }
