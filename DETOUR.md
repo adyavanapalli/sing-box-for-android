@@ -19,9 +19,12 @@ A moment later, Android handles the death of the process, finds no service in it
 All changes carry a `detour:` comment.
 
 - `bg/GuardService.kt` (new): a small service in its own process, `:guard`. While the VPN runs,
-  the main process starts and binds the guard. The guard watches the binder of the VPN service.
-  When that binder dies, the main process died, and the guard starts the VPN service again.
+  the main process starts and binds the guard, and it sends the guard a token: a Binder object
+  that lives in the main process. When the token dies, the main process died, and the guard
+  starts the VPN service again.
   - A stop by the user does not end the main process. Also, the main process stops the guard first.
+  - The guard does not watch a binding to the VPN service. After a kill, Android keeps stale
+    binding state for the service, and such a binding does not connect again.
   - The guard is sticky. If Android kills both processes, Android restarts the guard, and the guard
     starts the VPN service.
   - After 3 restarts in 10 minutes, or when a restart fails, the guard stops and posts an alert.
