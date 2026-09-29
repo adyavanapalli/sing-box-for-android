@@ -1,0 +1,167 @@
+name: Build detour SFA
+
+# Builds SFA from this branch with libbox from a sing-box release, signs it with the detour key,
+# and publishes it as a release of this fork. SFA's updater reads these releases.
+#
+# Secrets:
+#   DETOUR_KEYSTORE       the release keystore (PKCS12), base64
+#   DETOUR_KEYSTORE_PASS  the password of the keystore and of its key "sfa"
+
+on:
+  workflow_dispatch:
+    inputs:
+      sing_box_tag:
+        description: "The sing-box tag that pins libbox. It must match version.properties, for example v1.14.2."
+        required: true
+        default: v1.14.2
+      revision:
+        description: "The number of this detour build for the same upstream version: 1, 2, and more."
+        required: true
+        default: "1"
+      debuggable:
+        description: "Make a debuggable test build. The workflow never publishes one."
+        type: boolean
+        default: false
+      publish:
+        description: "Publish the build as a release."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out detour SFA
+        uses: actions/checkout@v5
+        with:
+          path: sing-box-for-android
+
+      - name: Check out sing-box
+        uses: actions/checkout@v5
+        with:
+          repository: SagerNet/sing-box
+          ref: ${{ inputs.sing_box_tag }}
+          path: sing-box
+          fetch-depth: 1
+
+      - name: Read the versions
+        id: version
+        env:
+          TAG: ${{ inputs.sing_box_tag }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          props=sing-box-for-android/version.properties
+          name=$(grep '^VERSION_NAME=' "$props" | cut -d= -f2)
+          code=$(grep '^VERSION_CODE=' "$props" | cut -d= -f2)
+          go=$(grep '^GO_VERSION=' "$props" | cut -d= -f2)
+          if [ "v$name" != "$TAG" ]; then
+            echo "::error::version.properties has $name, but the sing-box tag is $TAG"
+            exit 1
+          fi
+          case "$REVISION" in ''|*[!0-9]*) echo "::error::revision must be a number"; exit 1 ;; esac
+          if [ "$REVISION" -lt 1 ] || [ "$REVISION" -gt 99 ]; then
+            echo "::error::revision must be from 1 to 99"
+            exit 1
+          fi
+          # The version code stays above the upstream code and grows with each detour build.
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$(( code * 100 + REVISION ))" >> "$GITHUB_OUTPUT"
+          echo "go=${go#go}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.version.outputs.go }}
+          cache-dependency-path: sing-box/go.sum
+
+      - name: Set up the Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build libbox for arm64
+        working-directory: sing-box
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          make lib_install
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          # build_libbox copies libbox.aar into ../sing-box-for-android/app/libs when that directory exists.
+          mkdir -p ../sing-box-for-android/app/libs
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
+          ls -la ../sing-box-for-android/app/libs
+
+      - name: Set the version code
+        working-directory: sing-box-for-android
+        run: sed -i "s/^VERSION_CODE=.*/VERSION_CODE=${{ steps.version.outputs.code }}/" version.properties
+
+      - name: Write the signing key
+        working-directory: sing-box-for-android
+        env:
+          KEYSTORE: ${{ secrets.DETOUR_KEYSTORE }}
+          KEYSTORE_PASS: ${{ secrets.DETOUR_KEYSTORE_PASS }}
+        run: |
+          if [ -z "$KEYSTORE" ] || [ -z "$KEYSTORE_PASS" ]; then
+            echo "::error::the secrets DETOUR_KEYSTORE and DETOUR_KEYSTORE_PASS must be set"
+            exit 1
+          fi
+          echo "$KEYSTORE" | base64 -d > app/release.keystore
+          props=$(printf 'KEYSTORE_PASS=%s\nALIAS_NAME=sfa\nALIAS_PASS=%s\n' "$KEYSTORE_PASS" "$KEYSTORE_PASS" | base64 -w0)
+          echo "::add-mask::$props"
+          echo "LOCAL_PROPERTIES=$props" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the APK
+        working-directory: sing-box-for-android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./gradlew --no-daemon :app:assembleOtherRelease -PdetourDebuggable=${{ inputs.debuggable }}
+
+      - name: Collect the APK
+        id: collect
+        env:
+          NAME: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
+          DEBUGGABLE: ${{ inputs.debuggable }}
+        run: |
+          mkdir dist
+          apk=$(ls sing-box-for-android/app/build/outputs/apk/other/release/*arm64-v8a*.apk | head -1)
+          suffix=""
+          [ "$DEBUGGABLE" = true ] && suffix="-debuggable"
+          cp "$apk" "dist/SFA-$NAME-arm64-v8a$suffix.apk"
+          printf '{\n  "version_code": %s,\n  "version_name": "%s"\n}\n' "$CODE" "$NAME" > dist/SFA-version-metadata.json
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SFA-version-metadata.json dist/SHA256SUMS
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SFA-${{ steps.version.outputs.name }}-detour.${{ inputs.revision }}${{ inputs.debuggable && '-debuggable' || '' }}
+          path: dist
+
+      - name: Publish the release
+        if: inputs.publish && !inputs.debuggable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.version.outputs.name }}
+          REVISION: ${{ inputs.revision }}
+          TAG: ${{ inputs.sing_box_tag }}
+        run: |
+          gh release create "v$NAME-detour.$REVISION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "SFA $NAME (detour $REVISION)" \
+            --notes "SFA $NAME with the detour changes (GuardService and START_STICKY), libbox from sing-box $TAG. See DETOUR.md."
