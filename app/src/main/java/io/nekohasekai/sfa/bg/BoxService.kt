@@ -330,7 +330,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
-        // detour: stop the guard first, so that it does not start the service again.
+        // detour: log the reason, and stop the guard first, so that it does not start the service again.
+        Log.w(TAG, "stop: $type ${message.orEmpty()}")
         withContext(Dispatchers.Main) {
             GuardService.unwatch(service)
         }
@@ -355,6 +356,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             binder.broadcast { callback ->
                 callback.onServiceAlert(type.ordinal, message)
             }
+            // detour: the screen of SFA shows the alert only when it is open. The notification always shows it.
+            GuardService.notifyStopped(service, "$type${message?.let { ": $it" }.orEmpty()}. The VPN is down. Tap to open SFA.")
             status.value = Status.Stopped
             service.stopSelf()
         }

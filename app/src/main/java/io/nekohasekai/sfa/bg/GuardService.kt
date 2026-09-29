@@ -90,6 +90,34 @@ class GuardService : Service() {
             context.stopService(Intent(context, GuardService::class.java))
         }
 
+        /**
+         * Posts "SFA stopped" with a high priority. With lockdown, an unplanned stop leaves the phone
+         * without a network, so the user must learn about it even when SFA's screen is closed.
+         */
+        fun notifyStopped(context: Context, text: String) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(NotificationChannel(CHANNEL, "SFA stopped", NotificationManager.IMPORTANCE_HIGH))
+            }
+            val open = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notification = NotificationCompat.Builder(context, CHANNEL)
+                .setSmallIcon(R.drawable.ic_menu)
+                .setContentTitle("SFA stopped")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setCategory(NotificationCompat.CATEGORY_ERROR)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+            manager.notify(NOTIFICATION_ID, notification)
+        }
+
         private fun sendToken() {
             val context = boundContext ?: return
             val service = serviceClass ?: return
@@ -171,7 +199,7 @@ class GuardService : Service() {
         while (restarts.isNotEmpty() && now - restarts.first() > RESTART_WINDOW_MS) restarts.removeFirst()
         if (restarts.size >= RESTART_LIMIT) {
             Log.e(TAG, "$reason, but the guard restarted the service $RESTART_LIMIT times in 10 minutes")
-            alert("SFA stopped $RESTART_LIMIT times in 10 minutes. The guard does not start it again. Tap to open SFA.")
+            notifyStopped(this, "SFA stopped $RESTART_LIMIT times in 10 minutes. The guard does not start it again. Tap to open SFA.")
             return
         }
         restarts.addLast(now)
@@ -180,31 +208,7 @@ class GuardService : Service() {
             Log.i(TAG, "$reason: started ${name.substringAfterLast('.')} again")
         } catch (e: RuntimeException) {
             Log.e(TAG, "$reason: cannot start ${name.substringAfterLast('.')}", e)
-            alert("The VPN is down, and SFA could not start it again: ${e.message}. Tap to open SFA.")
+            notifyStopped(this, "The VPN is down, and SFA could not start it again: ${e.message}. Tap to open SFA.")
         }
-    }
-
-    private fun alert(text: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Guard alerts", NotificationManager.IMPORTANCE_HIGH))
-        }
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_menu)
-            .setContentTitle("SFA stopped")
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        manager.notify(NOTIFICATION_ID, notification)
     }
 }
