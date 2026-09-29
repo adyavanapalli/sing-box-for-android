@@ -14,7 +14,8 @@ import java.io.Closeable
 
 class GitHubUpdateChecker : Closeable {
     companion object {
-        private const val RELEASES_URL = "https://api.github.com/repos/SagerNet/sing-box/releases"
+        // detour: updates come from the releases of the detour fork, signed with its key.
+        private const val RELEASES_URL = "https://api.github.com/repos/adyavanapalli/sing-box-for-android/releases"
         private const val METADATA_FILENAME = "SFA-version-metadata.json"
     }
 

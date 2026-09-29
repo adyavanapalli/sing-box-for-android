@@ -157,6 +157,11 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+        <!-- detour: starts the service again after Android kills the main process. -->
+        <service
+            android:name=".bg.GuardService"
+            android:exported="false"
+            android:process=":guard" />
         <service
             android:name=".bg.ProxyService"
             android:exported="false"

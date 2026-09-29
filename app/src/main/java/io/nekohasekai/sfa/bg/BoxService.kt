@@ -187,6 +187,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             status.postValue(Status.Started)
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_started)
+                // detour: the guard starts the service again if Android kills this process.
+                GuardService.watch(service, service.javaClass)
             }
             notification.start()
         } catch (e: Exception) {
@@ -289,6 +291,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun stopService() {
         if (status.value != Status.Started) return
         status.value = Status.Stopping
+        // detour: stop the guard first, so that it does not start the service again.
+        GuardService.unwatch(service)
         if (receiverRegistered) {
             service.unregisterReceiver(receiver)
             receiverRegistered = false
@@ -326,6 +330,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
+        // detour: stop the guard first, so that it does not start the service again.
+        withContext(Dispatchers.Main) {
+            GuardService.unwatch(service)
+        }
         Settings.startedByUser = false
         Settings.dataStore.flush()
         val pfd = fileDescriptor
@@ -354,8 +362,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
     @OptIn(DelicateCoroutinesApi::class)
     @Suppress("SameReturnValue")
+    // detour: START_STICKY. It restarts the service only when Android handles the death of the
+    // process before the VPN code of Android drops its connection. GuardService covers the rest.
     internal fun onStartCommand(): Int {
-        if (status.value != Status.Stopped) return Service.START_NOT_STICKY
+        if (status.value != Status.Stopped) return Service.START_STICKY
         status.value = Status.Starting
 
         if (!receiverRegistered) {
@@ -383,12 +393,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             startService()
         }
-        return Service.START_NOT_STICKY
+        return Service.START_STICKY
     }
 
     internal fun onBind(): IBinder = binder
 
     internal fun onDestroy() {
+        GuardService.unwatch(service)
         idleModeUpdates.cancel()
         idleModeScope.cancel()
         binder.close()

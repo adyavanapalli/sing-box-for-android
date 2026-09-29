@@ -96,6 +96,8 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
             vcsInfo.include = false
+            // detour: a test build can be debuggable, so that `run-as` can kill its process. Never publish one.
+            isDebuggable = project.findProperty("detourDebuggable") == "true"
         }
     }
 

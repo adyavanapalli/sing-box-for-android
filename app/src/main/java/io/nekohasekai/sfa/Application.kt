@@ -41,6 +41,12 @@ class Application : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // detour: the guard process needs none of this. It would load libbox and start background work.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P &&
+            android.app.Application.getProcessName().endsWith(":guard")
+        ) {
+            return
+        }
         AppLifecycleObserver.register(this)
 
 //        Seq.setContext(this)
